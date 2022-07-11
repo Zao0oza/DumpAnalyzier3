@@ -18,10 +18,18 @@ with open(args.dump) as f:
 
 
 def parser(dumps, tree):
+    begin = None
+    finished = None
+    counter = 0
     for i in dumps:
-        res=''
-        value=None
-        if i['_source']["layers"].get("gvcp", False):
+        res = ''
+        value = None
+        if i['_source']["layers"].get("udp", False) and not i['_source']["layers"].get("gvcp", False):
+            if not begin:
+                begin = i['_source']["layers"]["frame"]['frame.time_relative']
+            finished = i['_source']["layers"]["frame"]['frame.time_relative']
+            counter += 1
+        elif i['_source']["layers"].get("gvcp", False):
             for j in i['_source']["layers"]["gvcp"].keys():
                 if "Command Header" or 'Acknowledge Header' in j:
                     if i['_source']["layers"]["gvcp"][j].get("gvcp.bootstrap.custom.register.write", False):
@@ -39,15 +47,34 @@ def parser(dumps, tree):
                         result = tree.find(text)
                         if result:
                             if 'WRITEREG' in j.split(':')[1]:
-                                value=i['_source']["layers"]["gvcp"][j].get("gvcp.bootstrap.custom.register.write_tree")
-                                value=value['gvcp.bootstrap.custom.register.value']
-                            elif  'READREG' in j.split(':')[1]:
-                                value=i['_source']["layers"]["gvcp"][j].get("gvcp.bootstrap.custom.register.read_value")
+                                value = i['_source']["layers"]["gvcp"][j].get(
+                                    "gvcp.bootstrap.custom.register.write_tree")
+                                value = value['gvcp.bootstrap.custom.register.value']
+                            elif 'READREG' in j.split(':')[1]:
+                                value = i['_source']["layers"]["gvcp"][j].get(
+                                    "gvcp.bootstrap.custom.register.read_value")
                             command_dict[result.get("Name")] = {x.tag.split('}')[1]: x.text for x in tree.find(text)}
+                            if begin and finished:
+                                if begin == finished:
+                                    timestamp_dict[finished] = 'UDP'
+                                else:
+                                    timestamp_dict[begin] = 'UDP_BEGIN'
+                                    timestamp_dict[finished] = ['UDP_FINISHED', {"packets": counter}]
+                            begin = None
+                            finished = None
+                            counter = 0
                             timestamp_dict[i['_source']["layers"]["frame"]['frame.time_relative']] = [j.split(':')[1],
-                                                                                                      {"value":int(value.split('x')[1].upper(),16) if value else None},
-                                                                                                      result.get("Name"),
-                                                                                                      command_dict[result.get("Name")].get('Description')]
+                                                                                                      {"value": int(
+                                                                                                          value.split(
+                                                                                                              'x')[
+                                                                                                              1].upper(),
+                                                                                                          16) if value else None},
+                                                                                                      {result.get(
+                                                                                                          "Name"):
+                                                                                                      command_dict[
+                                                                                                          result.get(
+                                                                                                              "Name")].get(
+                                                                                                          'Description')}]
     with open(args.dump[0:-5] + '_command.txt', 'w') as file:
         for k, v in command_dict.items():
             file.write(str(k) + ' ' + str(v) + '\n')
