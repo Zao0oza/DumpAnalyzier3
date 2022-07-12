@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import argparse
 import xml.etree.cElementTree as ET
 import json
