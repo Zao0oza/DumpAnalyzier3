@@ -9440,7 +9440,8 @@
       <AccessMode>RO</AccessMode>
       <pPort>Device</pPort>
       <Sign>Unsigned</Sign>
-      <Endianess>LittleEndian</Endianess>
+      <Endianess>LittleEndian
+      </Endianess>
     </IntReg>
     <IntReg Name="FFCFlashSaveReg" NameSpace="Custom">
       <Address>0x20000000</Address>

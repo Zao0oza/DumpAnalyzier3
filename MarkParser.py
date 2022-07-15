@@ -6,25 +6,32 @@ import json
 
 parser = argparse.ArgumentParser(description='парсер дампа ebus в json формате, выделяет комманды из мануала, '
                                              'на выходе список исползованных комманд и список коммнад с timestmap')
-parser.add_argument('-dump', type=str, default='mer200/exposure12_500.json', help='путь к файлу с дампом')
-parser.add_argument('-manual', type=str, default='MER2-2000-19U3C(FCE22010010).XML', help='путь к файлу с коммандами')
+parser.add_argument('-dump', type=str, default='viewier/single_gvcp.json', help='путь к файлу с дампом')
+parser.add_argument('-manual', type=str, default='LAN_UPD_211222_Mark1215C.xml', help='путь к файлу с коммандами')
 
 args = parser.parse_args()
-
+formula = set()
 tree = ET.parse(args.manual)
 command_dict = {}
+simple_comand_dict = {}
+
 timestamp_dict = {}
 with open(args.dump) as f:
     string = f.read()
     dumps = json.loads(string)
 
+result = tree.find(
+    './*[{http://www.genicam.org/GenApi/Version_1_1}StructReg]//*[@Comment="%s"]' % 'RemoveParameterLimitInqReg')
+
 
 def parser(dumps, tree, manual):
+    for x in tree.findall('.//*{http://www.genicam.org/GenApi/Version_1_1}Formula'):
+        formula.add(x.text)
     if manual == 'MER2-2000-19U3C(FCE22010010).XML':
         protocol = "u3v"
-    elif manual == 'LAN_UPD_211222_Mark1215C.xml':
+    elif 'Mark' in manual:
         protocol = "gvcp"
-    begin, finished, begin_gvsp, finished_gvsp = None, None, None, None
+    begin, finished, begin_gvsp, finished_gvsp, simple_comands = None, None, None, None, None
     counter, counter_gvsp = 0, 0
     for i in dumps:
         res = ''
@@ -51,11 +58,23 @@ def parser(dumps, tree, manual):
                         res = i['_source']["layers"][protocol][j]["gvcp.bootstrap.custom.register.write"]
                     elif i['_source']["layers"][protocol][j].get("gvcp.bootstrap.custom.register.read", False):
                         res = i['_source']["layers"][protocol][j]["gvcp.bootstrap.custom.register.read"]
+                    elif i['_source']["layers"][protocol][j].get("gvcp.cmd.readreg.bootstrapregister", False):
+                        res = i['_source']["layers"][protocol][j]["gvcp.cmd.readreg.bootstrapregister"]
+                        if i['_source']["layers"][protocol][j].get("gvcp.bootstrap.control.switchoverenable") == '1':
+                            value = 'OpenAccess'
+                        elif i['_source']["layers"][protocol][j].get("gvcp.bootstrap.control.controlaccess") == "1":
+                            value = 'ControlAccess'
+                            print(45)
+                        elif i['_source']["layers"][protocol][j].get("gvcp.bootstrap.control.exclusiveaccess") == "1":
+                            value = 'ExclusiveAccess'
+                        else:
+                            value=44
                     else:
                         timestamp_items = j
                         for key in i['_source']["layers"][protocol][j].keys():
                             if 'gvcp.bootstrap' in key:
                                 timestamp_items = [j.split(':')[1], i['_source']["layers"][protocol][j][key]]
+
                     res = res[:2] + res[-4::].upper()
                     text_reg = './/*[{http://www.genicam.org/GenApi/Version_1_0}Address="%s"]' % res
                     result_reg = tree.find(text_reg)
@@ -90,30 +109,62 @@ def parser(dumps, tree, manual):
                         res = i['_source']["layers"][protocol][j].get('u3v.gencp.address', None)
                         res = res[:2] + res[-8::].upper()
                     result_reg = tree.find('.//*[{http://www.genicam.org/GenApi/Version_1_1}Address="%s"]' % res)
+                    if not result_reg:
+                        for f in formula:
+                            if str(res) in f:
+                                result_reg = tree.find(
+                                    './/*[{http://www.genicam.org/GenApi/Version_1_1}Formula="%s"]' % f)
+                                formula_res = f
+                                break
+
                     if result_reg:
                         text = './/*[{http://www.genicam.org/GenApi/Version_1_1}Integer]/*[@Name="%s"]' % result_reg.get(
                             "Name")
-                        result = tree.find(text)
+                        if tree.find(text):
+                            result = tree.find(text)
+                        else:
+                            result = tree.find(
+                                './/*[{http://www.genicam.org/GenApi/Version_1_1}StructReg]//*[@Comment="%s"]' % result_reg.get(
+                                    "Name"))
+
                         if result:
                             value = i['_source']["layers"][protocol][j].get("u3v.gencp.custom_data", None)
                             command_dict[result.get("Name")] = {x.tag.split('}')[1]: x.text for x in
                                                                 tree.find(text)}
                             if value:
-                                string=''
-                                value=int(string.join(value.split(':')[::-1]),16)
+                                string = ''
+                                value = int(string.join(value.split(':')[::-1]), 16)
                                 timestamp_items = [j,
                                                    {"value": value},
                                                    {result.get("Name"): command_dict[result.get("Name")]}
                                                    ]
+                                simple_comands = ['read' if "read" in j else 'write', result.get("Name"), value,
+                                                  command_dict[result.get("Name")].get('Description') if command_dict[
+                                                      result.get("Name")].get('Description') else None]
                             else:
-                                timestamp_items = [j,
-                                                   {result.get("Name"): command_dict[result.get("Name")]}
-                                                   ]
+                                if formula_res:
+                                    timestamp_items = [j,
+                                                       {result.get("Name"): command_dict[result.get("Name")]},
+                                                       {'formula': formula_res}
+                                                       ]
+                                    simple_comands = ['read' if "read" in j else 'write', result.get("Name"),
+                                                      formula_res]
+                                else:
+                                    timestamp_items = [j,
+                                                       {result.get("Name"): command_dict[result.get("Name")]}
+                                                       ]
+                                    simple_comands = ['read' if "read" in j else 'write', result.get("Name")]
                     else:
-                        timestamp_items=j
+                        timestamp_items = [j, i['_source']["layers"][protocol][j]]
+                        # timestamp_items = None
+                        simple_comands = None
+                elif 'stream_leader' in j:
+                    timestamp_items = i['_source']["layers"][protocol][j]
+                    simple_comands = j
 
                 else:
                     timestamp_items = j
+                    simple_comands = None
                 if begin and finished:
                     if begin == finished:
                         timestamp_dict[finished] = 'UDP'
@@ -126,15 +177,26 @@ def parser(dumps, tree, manual):
                     else:
                         timestamp_dict[begin_gvsp] = 'GVSP_BEGIN'
                         timestamp_dict[finished_gvsp] = {"GVSP_FINISHED": counter_gvsp}
-                begin, finished, begin_gvsp, finished_gvsp = None, None, None, None
+                begin, finished, begin_gvsp, finished_gvsp, formula_res, result_reg = None, None, None, None, None, None
                 counter, counter_gvsp = 0, 0
+
                 timestamp_dict[timestamp_time] = timestamp_items
+                if simple_comands:
+                    simple_comand_dict[timestamp_time] = simple_comands
         else:
             timestamp_dict[timestamp_time] = "USB"
 
     with open(args.dump[0:-5] + '_command.txt', 'w') as file:
         for k in sorted(command_dict.keys()):
             file.write(str(k) + ' ' + str(command_dict[k]) + '\n')
+    with open(args.dump[0:-5] + '_simple_command.txt', 'w') as file:
+
+        for k in sorted(simple_comand_dict.keys()):
+            string = ""
+            for j in simple_comand_dict[k]:
+                if j:
+                    string += str(j) + ' '
+            file.write(string + '\n')
     with open(args.dump[0:-5] + '_timestamp.txt', 'w') as file:
         for k in sorted(timestamp_dict.keys()):
             file.write(str(k) + ' ' + str(timestamp_dict[k]) + '\n')
